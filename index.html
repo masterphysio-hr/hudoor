@@ -63,7 +63,7 @@
 </div>
 
 <script>
-  const API_URL = 'https://script.google.com/macros/s/AKfycbyBYg6j_9tHUmAHwaYgUGBaLigwVAXkubAmf2BWTaoRF5yXTXSmbtAY3QyAp9RCAdcy_g/exec';
+  const API_URL = 'https://script.google.com/macros/s/AKfycbwE4rnFiLtxj3wT2tTlhACxg0unZZBTluo-saOkAKIgCLbJ7PxIUhS-P5yYKStXE31X4A/exec';
   const PAGE_URL = location.origin + location.pathname;
   const IS_ADMIN = new URLSearchParams(location.search).has('admin');
   const A = {IN:'حضور', OUT:'انصراف', BREAK_OUT:'خروج استئذان', BREAK_IN:'عودة من استئذان'};
@@ -339,8 +339,25 @@
     };
   }
 
+  async function permDecision(q){
+    setBusy(true, 'جاري تنفيذ القرار...');
+    try {
+      const r = await call('attPermDecision', q.get('perm'), q.get('act'), q.get('k'));
+      const okd = r.status === 'مقبول';
+      const title = r.already ? 'تم البت في هذا الطلب مسبقاً' : (okd ? '✅ تمت الموافقة على الاستئذان' : '❌ تم رفض الاستئذان');
+      view(`<div class="card"><h3>${title}</h3>
+        <p><b>الموظف:</b> ${esc(r.name)}</p>
+        <p><b>السبب:</b> ${esc(r.reason)}</p>
+        <p class="muted">وقت الطلب: ${esc(r.time)}</p>
+        <div class="note ${okd ? 'ok' : 'err'}">الحالة: ${esc(r.status)}</div>
+        <p class="muted">القرار يظهر للموظف في صفحته تلقائياً.</p></div>`);
+    } catch (e) { show('err', errText(e)); }
+    finally { setBusy(false); }
+  }
+
   tick(); setInterval(tick, 1000);
-  if (IS_ADMIN) adminLogin(); else loadEmployee();
+  const Q = new URLSearchParams(location.search);
+  if (Q.has('perm')) permDecision(Q); else if (IS_ADMIN) adminLogin(); else loadEmployee();
 </script>
 </body>
 </html>
