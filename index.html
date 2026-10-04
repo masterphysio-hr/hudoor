@@ -1,0 +1,346 @@
+<!DOCTYPE html>
+<html dir="rtl" lang="ar">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>حضور العيادة</title>
+<meta name="theme-color" content="#0f766e">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="حضور العيادة">
+<link rel="manifest" href="manifest.json">
+<link rel="icon" href="icon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="icon-180.png">
+<link href="https://fonts.googleapis.com/css2?family=Tajawal:wght@400;500;700&display=swap" rel="stylesheet">
+<style>
+  :root{--brand:#0f766e;--brand-d:#115e59;--bg:#eef4f3;--card:#fff;--ink:#0f172a;--muted:#64748b;
+        --ok:#15803d;--err:#b91c1c;--line:#e2e8f0}
+  *{box-sizing:border-box}
+  body{margin:0;font-family:'Tajawal',system-ui,sans-serif;background:var(--bg);color:var(--ink)}
+  .wrap{max-width:440px;margin:0 auto;padding:20px 16px 40px}
+  header{text-align:center;margin-bottom:16px}
+  header h1{font-size:18px;margin:0;color:var(--brand-d)}
+  .clock{font-size:44px;font-weight:700;margin-top:6px;font-variant-numeric:tabular-nums}
+  .date{color:var(--muted);font-size:14px}
+  .card{background:var(--card);border-radius:16px;padding:18px;box-shadow:0 1px 3px rgba(0,0,0,.07);margin-bottom:14px}
+  .card h3{margin:0 0 8px;font-size:17px}
+  .btn{display:block;width:100%;border:0;border-radius:12px;padding:16px;font:inherit;font-size:18px;
+       font-weight:700;color:#fff;background:var(--brand);margin-top:10px;cursor:pointer;text-align:center;text-decoration:none}
+  .btn.out{background:#334155}.btn.brk{background:#b45309}.btn.back{background:#2563eb}
+  .btn.ghost{background:transparent;color:var(--brand);border:1.5px solid var(--brand);font-size:15px;padding:12px}
+  .btn:disabled{opacity:.5}
+  select,input,textarea{width:100%;font:inherit;font-size:16px;padding:12px;border:1px solid var(--line);
+       border-radius:10px;margin-top:6px;background:#fff}
+  .msg{padding:12px 14px;border-radius:12px;margin-bottom:14px;font-weight:500;display:none}
+  .msg.ok{background:#dcfce7;color:var(--ok)}.msg.err{background:#fee2e2;color:var(--err)}
+  .msg.info{background:#e0f2fe;color:#075985}
+  .muted{color:var(--muted);font-size:14px}
+  .row{display:flex;justify-content:space-between;align-items:center;padding:10px 0;border-bottom:1px solid var(--line);gap:8px}
+  .row:last-child{border-bottom:0}
+  .sm{font:inherit;font-size:13px;padding:8px 12px;border-radius:8px;border:0;color:#fff;cursor:pointer}
+  .tbl{overflow-x:auto;margin-top:10px}
+  table{width:100%;border-collapse:collapse;font-size:13px;white-space:nowrap}
+  th,td{padding:6px;border-bottom:1px solid var(--line);text-align:right}
+  th{color:var(--muted);font-weight:500}
+  .seg{display:flex;gap:8px;margin-bottom:6px}
+  .segb{flex:1;padding:12px;border-radius:10px;border:1.5px solid var(--line);background:#fff;font:inherit;font-size:15px;cursor:pointer;color:var(--ink)}
+  .segb.on{border-color:var(--brand);background:#e6f4f1;color:var(--brand-d);font-weight:700}
+  .note{padding:10px 12px;border-radius:10px;background:#fef3c7;color:#92400e;margin-top:10px;font-weight:500}
+  .note.ok{background:#dcfce7;color:var(--ok)}.note.err{background:#fee2e2;color:var(--err)}
+  .hidden{display:none}
+  #busy{text-align:center;color:var(--muted);margin-bottom:10px;min-height:20px}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>عيادة المعالج البارع — الحضور والانصراف</h1>
+    <div class="clock" id="clock">--:--</div>
+    <div class="date" id="date"></div>
+  </header>
+  <div id="msg" class="msg"></div>
+  <div id="busy"></div>
+  <div id="view"></div>
+</div>
+
+<script>
+  const API_URL = 'https://script.google.com/macros/s/AKfycbyBYg6j_9tHUmAHwaYgUGBaLigwVAXkubAmf2BWTaoRF5yXTXSmbtAY3QyAp9RCAdcy_g/exec';
+  const PAGE_URL = location.origin + location.pathname;
+  const IS_ADMIN = new URLSearchParams(location.search).has('admin');
+  const A = {IN:'حضور', OUT:'انصراف', BREAK_OUT:'خروج استئذان', BREAK_IN:'عودة من استئذان'};
+  const BTN = {'حضور':'', 'انصراف':'out', 'خروج استئذان':'brk', 'عودة من استئذان':'back'};
+  const $ = s => document.querySelector(s);
+  const esc = s => String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+  const view = html => { $('#view').innerHTML = html; };
+  const show = (type, text) => { const m = $('#msg'); m.className = 'msg ' + type; m.textContent = text; m.style.display = 'block'; };
+  const hideMsg = () => { $('#msg').style.display = 'none'; };
+  const errText = e => (e && e.message ? e.message : String(e)).replace(/^Error:\s*/, '');
+  function setBusy(on, text){
+    $('#busy').textContent = on ? (text || '') : '';
+    document.querySelectorAll('button').forEach(b => b.disabled = on);
+  }
+  async function call(fn, ...args){
+    let r;
+    try {
+      r = await fetch(API_URL, {method: 'POST', headers: {'Content-Type': 'text/plain;charset=utf-8'},
+        body: JSON.stringify({fn: fn, args: args})});
+    } catch (e) { throw new Error('تعذّر الاتصال. تأكد من الإنترنت وحاول مرة ثانية.'); }
+    let j;
+    try { j = await r.json(); } catch (e) { throw new Error('تعذّر الاتصال بالخادم. حاول مرة ثانية.'); }
+    if (!j.ok) throw new Error(j.error);
+    return j.data;
+  }
+
+  function tick(){
+    const d = new Date();
+    $('#clock').textContent = d.toLocaleTimeString('en-GB', {hour:'2-digit', minute:'2-digit', timeZone:'Asia/Riyadh'});
+    $('#date').textContent = d.toLocaleDateString('ar-SA-u-ca-gregory-nu-latn', {weekday:'long', day:'numeric', month:'long', year:'numeric', timeZone:'Asia/Riyadh'});
+  }
+
+  function getToken(){
+    try {
+      let t = localStorage.getItem('att_device');
+      if (!t) {
+        t = (window.crypto && crypto.randomUUID) ? crypto.randomUUID()
+          : 'd' + Date.now().toString(36) + Math.random().toString(36).slice(2) + Math.random().toString(36).slice(2);
+        localStorage.setItem('att_device', t);
+      }
+      return t;
+    } catch (e) { return null; }
+  }
+
+  function getLoc(){
+    return new Promise((res, rej) => {
+      if (!navigator.geolocation) return rej(new Error('جهازك لا يدعم تحديد الموقع.'));
+      navigator.geolocation.getCurrentPosition(
+        p => res(p.coords),
+        e => rej(new Error(e.code === 1
+          ? 'لازم تسمح للصفحة بالوصول لموقعك (من إعدادات المتصفح ← الموقع ← سماح).'
+          : 'تعذّر تحديد موقعك. تأكد إن الموقع (GPS) شغّال وحاول مرة ثانية.')),
+        {enableHighAccuracy:true, timeout:20000, maximumAge:0});
+    });
+  }
+
+  /* ---------------- الموظف ---------------- */
+  async function loadEmployee(){
+    hideMsg();
+    const t = getToken();
+    if (!t) { view('<div class="card">المتصفح يمنع حفظ بيانات الجهاز. افتح الرابط في Safari أو Chrome مباشرة.</div>'); return; }
+    setBusy(true, 'جاري التحميل...');
+    try { render(await call('attGetStatus', t)); }
+    catch (e) { show('err', errText(e)); }
+    finally { setBusy(false); }
+  }
+
+  function render(s){
+    if (s.state === 'new') {
+      view(`<div class="card">
+        <h3>أول مرة؟ اربط جوالك باسمك</h3>
+        <p class="muted">اختر اسمك، وبعد موافقة المدير تقدر تسجل حضورك من هذا الجوال فقط.</p>
+        <select id="name"><option value="">— اختر اسمك —</option>
+          ${s.names.map(n => `<option>${esc(n)}</option>`).join('')}</select>
+        <button class="btn" id="req">طلب ربط الجوال</button></div>`);
+      $('#req').onclick = requestLink;
+    } else if (s.state === 'pending') {
+      view(`<div class="card"><h3>أهلاً ${esc(s.name)}</h3>
+        <p>طلب ربط جوالك بانتظار موافقة المدير ⏳</p>
+        <button class="btn ghost" id="rf">تحديث</button></div>`);
+      $('#rf').onclick = loadEmployee;
+    } else {
+      const last = s.last ? `آخر حركة: ${esc(s.last.action)} — ${esc(s.last.time)}` : 'لا توجد حركات سابقة';
+      const canBreak = s.allowed.indexOf(A.BREAK_OUT) >= 0;
+      const p = s.perm || {state: 'none'};
+      let permHtml = '';
+      if (p.state === 'pending') {
+        permHtml = '<div class="note">⏳ طلب الاستئذان بانتظار موافقة المدير</div>';
+      } else if (p.state === 'approved') {
+        permHtml = '<div class="note ok">✅ تمت الموافقة على استئذانك</div>' + (canBreak
+          ? `<button class="btn brk" data-a="${A.BREAK_OUT}">${A.BREAK_OUT}</button>`
+          : '<p class="muted">سجّل حضورك أولاً عشان تقدر تسجّل الخروج.</p>');
+      } else {
+        if (p.state === 'rejected') permHtml = '<div class="note err">❌ تم رفض طلب الاستئذان</div>';
+        if (s.allowed.indexOf(A.BREAK_IN) < 0) permHtml += `<div id="reasonBox" class="hidden"><label class="muted">سبب الاستئذان</label>
+          <textarea id="reason" rows="2" maxlength="200"></textarea></div>
+          <button class="btn ghost" id="permReq">طلب استئذان</button>`;
+      }
+      view(`<div class="card">
+        <h3>أهلاً ${esc(s.name)} 👋</h3>
+        <p class="muted">${last}</p>
+        ${s.allowed.filter(a => a !== A.BREAK_OUT).map(a => `<button class="btn ${BTN[a] || ''}" data-a="${esc(a)}">${esc(a)}</button>`).join('')}
+        ${permHtml}
+      </div>
+      <div class="card"><h3>🏠 زيارة منزلية</h3>
+        <div class="seg">${['داخل الدوام', 'خارج الدوام'].map(t => `<button class="segb ${t === s.hvSuggest ? 'on' : ''}" data-hv="${t}">${t}</button>`).join('')}</div>
+        <input id="patient" maxlength="100" placeholder="اسم المريض أو ملاحظة (اختياري)">
+        <button class="btn back" id="hvBtn">تسجيل الزيارة</button>
+      </div>`);
+      let hvType = s.hvSuggest;
+      document.querySelectorAll('[data-hv]').forEach(b => b.onclick = () => {
+        hvType = b.dataset.hv;
+        document.querySelectorAll('[data-hv]').forEach(x => x.classList.toggle('on', x === b));
+      });
+      $('#hvBtn').onclick = () => doHomeVisit(hvType);
+      document.querySelectorAll('[data-a]').forEach(b => b.onclick = () => doAction(b.dataset.a));
+      if ($('#permReq')) $('#permReq').onclick = requestPerm;
+    }
+    clearTimeout(window._pt);
+    if (s.state === 'pending' || (s.perm && s.perm.state === 'pending')) {
+      window._pt = setTimeout(async () => {
+        try { const n = await call('attGetStatus', getToken()); render(n);
+          if (n.perm && n.perm.state === 'approved') show('ok', 'تمت الموافقة على استئذانك ✅');
+          if (n.perm && n.perm.state === 'rejected') show('err', 'تم رفض طلب الاستئذان');
+        } catch (e) {}
+      }, 20000);
+    }
+  }
+
+  async function requestPerm(){
+    hideMsg();
+    const box = $('#reasonBox');
+    if (box.classList.contains('hidden')) {
+      box.classList.remove('hidden'); $('#reason').focus();
+      $('#permReq').textContent = 'إرسال الطلب للمدير';
+      return;
+    }
+    const reason = $('#reason').value.trim();
+    if (!reason) { show('err', 'اكتب سبب الاستئذان.'); return; }
+    setBusy(true, 'جاري إرسال الطلب...');
+    try { render(await call('attRequestPermission', getToken(), reason)); show('info', 'تم إرسال طلب الاستئذان للمدير.'); }
+    catch (e) { show('err', errText(e)); }
+    finally { setBusy(false); }
+  }
+
+  async function requestLink(){
+    hideMsg();
+    const name = $('#name').value;
+    if (!name) { show('err', 'اختر اسمك أولاً.'); return; }
+    setBusy(true, 'جاري إرسال الطلب...');
+    try { render(await call('attRequestLink', getToken(), name)); show('info', 'تم إرسال الطلب للمدير.'); }
+    catch (e) { show('err', errText(e)); }
+    finally { setBusy(false); }
+  }
+
+  async function doAction(a){
+    hideMsg();
+    const reason = '';
+    setBusy(true, 'جاري تحديد موقعك...');
+    try {
+      const c = await getLoc();
+      setBusy(true, 'جاري التسجيل...');
+      const r = await call('attAction', getToken(), a, c.latitude, c.longitude, c.accuracy, reason);
+      render(r.status);
+      show('ok', r.msg);
+      if (navigator.vibrate) navigator.vibrate(80);
+    } catch (e) { show('err', errText(e)); }
+    finally { setBusy(false); }
+  }
+
+  async function doHomeVisit(type){
+    hideMsg();
+    setBusy(true, 'جاري تحديد موقعك...');
+    try {
+      const c = await getLoc();
+      setBusy(true, 'جاري التسجيل...');
+      const r = await call('attHomeVisit', getToken(), type, $('#patient').value, c.latitude, c.longitude, c.accuracy);
+      render(r.status);
+      show('ok', r.msg);
+      if (navigator.vibrate) navigator.vibrate(80);
+    } catch (e) { show('err', errText(e)); }
+    finally { setBusy(false); }
+  }
+
+  /* ---------------- المدير ---------------- */
+  let PIN = '';
+  function adminLogin(){
+    view(`<div class="card"><h3>صفحة المدير</h3>
+      <input id="pin" type="password" inputmode="numeric" placeholder="الرقم السري">
+      <button class="btn" id="go">دخول</button></div>`);
+    $('#go').onclick = async () => {
+      hideMsg(); setBusy(true, 'جاري الدخول...');
+      try { PIN = $('#pin').value; renderAdmin(await call('attAdminLogin', PIN, PAGE_URL)); }
+      catch (e) { show('err', errText(e)); }
+      finally { setBusy(false); }
+    };
+  }
+
+  async function adminRun(fn, args, okText){
+    hideMsg(); setBusy(true, 'جاري التنفيذ...');
+    try { renderAdmin(await call(fn, PIN, ...args)); if (okText) show('ok', okText); }
+    catch (e) { show('err', errText(e)); }
+    finally { setBusy(false); }
+  }
+
+  function renderAdmin(d){
+    const qr = 'https://api.qrserver.com/v1/create-qr-code/?size=600x600&margin=12&data=' + encodeURIComponent(PAGE_URL);
+    const month = new Date().toLocaleDateString('en-CA', {timeZone:'Asia/Riyadh'}).slice(0, 7);
+    view(`
+      <div class="card"><h3>📍 موقع العيادة</h3>
+        <p class="muted">${d.hasLocation ? 'محفوظ ✅ — النطاق المسموح ' + d.radius + ' م' : 'غير محدد بعد ⚠️'}</p>
+        <p class="muted">اضغط الزر وأنت واقف داخل العيادة.</p>
+        <button class="btn" id="loc">حفظ موقعي الحالي كموقع العيادة</button></div>
+
+      <div class="card"><h3>🕒 طلبات الاستئذان (${d.perms.length})</h3>
+        ${d.perms.length ? d.perms.map(p => `<div class="row">
+          <div><b>${esc(p.name)}</b><div class="muted">${esc(p.reason)}</div><div class="muted">${esc(p.time)}</div></div>
+          <div><button class="sm" style="background:var(--ok)" data-pa="${esc(p.id)}">قبول</button>
+               <button class="sm" style="background:var(--err)" data-pr="${esc(p.id)}">رفض</button></div></div>`).join('')
+          : '<p class="muted">لا توجد طلبات</p>'}
+        <button class="btn ghost" id="arf">تحديث</button></div>
+
+      <div class="card"><h3>📱 طلبات ربط الجوالات (${d.pending.length})</h3>
+        ${d.pending.length ? d.pending.map(p => `<div class="row">
+          <div><b>${esc(p.name)}</b><div class="muted">${esc(p.date)}${p.replacing ? ' — جوال بديل' : ''}</div></div>
+          <div><button class="sm" style="background:var(--ok)" data-ap="${esc(p.name)}">موافقة</button>
+               <button class="sm" style="background:var(--err)" data-rj="${esc(p.name)}">رفض</button></div></div>`).join('')
+          : '<p class="muted">لا توجد طلبات</p>'}</div>
+
+      <div class="card"><h3>👥 الجوالات المربوطة</h3>
+        ${d.linked.map(l => `<div class="row"><span>${esc(l.name)}</span>
+          ${l.linked ? `<button class="sm" style="background:#64748b" data-ul="${esc(l.name)}">فك الربط</button>`
+                     : '<span class="muted">غير مربوط</span>'}</div>`).join('')}</div>
+
+      <div class="card"><h3>🔳 رمز QR للطباعة</h3>
+        <img src="${qr}" style="width:100%;border-radius:8px" alt="QR">
+        <a class="btn ghost" href="${qr}" target="_blank">فتح الصورة للحفظ والطباعة</a></div>
+
+      <div class="card"><h3>📊 ملخص الشهر</h3>
+        <input type="month" id="mon" value="${month}">
+        <button class="btn" id="sum">عرض الملخص</button>
+        <div id="sumOut"></div></div>`);
+
+    $('#loc').onclick = async () => {
+      hideMsg(); setBusy(true, 'جاري تحديد الموقع...');
+      try {
+        const c = await getLoc();
+        renderAdmin(await call('attAdminSaveLocation', PIN, c.latitude, c.longitude, c.accuracy));
+        show(c.accuracy > 100 ? 'info' : 'ok', 'تم حفظ موقع العيادة ✅ (دقة ' + Math.round(c.accuracy) + ' م)' +
+          (c.accuracy > 100 ? ' — الدقة ضعيفة، الأفضل تعيدها من الجوال داخل العيادة.' : ''));
+      } catch (e) { show('err', errText(e)); }
+      finally { setBusy(false); }
+    };
+    document.querySelectorAll('[data-pa]').forEach(b => b.onclick = () => adminRun('attAdminPerm', [b.dataset.pa, true], 'تم قبول الاستئذان ✅'));
+    document.querySelectorAll('[data-pr]').forEach(b => b.onclick = () => adminRun('attAdminPerm', [b.dataset.pr, false], 'تم رفض الاستئذان'));
+    $('#arf').onclick = () => adminRun('attAdminLogin', [PAGE_URL], '');
+    document.querySelectorAll('[data-ap]').forEach(b => b.onclick = () => adminRun('attAdminApprove', [b.dataset.ap], 'تمت الموافقة ✅'));
+    document.querySelectorAll('[data-rj]').forEach(b => b.onclick = () => adminRun('attAdminReject', [b.dataset.rj], 'تم رفض الطلب'));
+    document.querySelectorAll('[data-ul]').forEach(b => b.onclick = () => {
+      if (confirm('فك ربط جوال ' + b.dataset.ul + '؟ لازم يطلب ربط من جديد.')) adminRun('attAdminUnlink', [b.dataset.ul], 'تم فك الربط');
+    });
+    $('#sum').onclick = async () => {
+      hideMsg(); setBusy(true, 'جاري حساب الملخص...');
+      try {
+        const r = await call('attAdminSummary', PIN, $('#mon').value);
+        const cols = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11];
+        $('#sumOut').innerHTML = `<div class="tbl"><table>
+          <tr>${cols.map(i => `<th>${esc(r.headers[i])}</th>`).join('')}</tr>
+          ${r.rows.map(row => `<tr>${cols.map(i => `<td>${esc(row[i])}</td>`).join('')}</tr>`).join('')}
+          </table></div><p class="muted">محفوظ أيضاً في تبويب "ملخص الحضور".</p>`;
+      } catch (e) { show('err', errText(e)); }
+      finally { setBusy(false); }
+    };
+  }
+
+  tick(); setInterval(tick, 1000);
+  if (IS_ADMIN) adminLogin(); else loadEmployee();
+</script>
+</body>
+</html>
